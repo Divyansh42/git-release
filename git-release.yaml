@@ -1,0 +1,173 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: git-release
+spec:
+  workspaces:
+    - name: upload
+  params:
+    - name: PLATFORM
+      type: string
+      description: Git platform it can be Github or Gitlab.
+      default: Github
+    - name: TAG_NAME
+      description: Name of the tag
+      type: string
+    - name: NAME
+      description: Name of the release
+      type: string
+    - name: DESCRIPTION
+      type: string
+      description: Short description of the release.
+      default: ""
+    - name: OWNER
+      type: string
+      description: User name of the Github owner
+      default: ""
+    - name: REPO_NAME
+      type: string
+      description: Full name of the repository where the release is to made, valid only for the Github.
+      default: ""
+    - name: BRANCH
+      type: string
+      description: Branch on which release is to be made, required only in case of Github.
+      default: master
+    - name: RELEASE_REF
+      type: string
+      description: Required in the case of Gitlab, It can be a commit SHA, another tag name, or a branch name.
+      default: ""
+    - name: PROJECT_ID
+      type: string
+      description: Project id for gitlab project.
+      default: ""
+    - name: UPLOAD_ASSET_NAME
+      type: string
+      description: Name of the asset to be uploaded.
+      default: ""
+    - name: UPLOAD_ASSET_URL
+      type: string
+      description: Uplaod URL for the hosted asset, required only in case of gitlab.
+      default: ""
+    - name: git-token-secret
+      type: string
+      description: name of the secret holding the git-token.
+      default: git-secret
+    - name: git-token-secret-key
+      type: string
+      description: name of the secret key holding the git-token.
+      default: api-token
+  steps:
+    - name: release
+      image: registry.access.redhat.com/ubi8/ubi-minimal:latest
+      script: |
+        #!/usr/bin/env bash
+
+        # Creating the api post data for the Github
+        #
+        generate_github_api_post_data()
+        {
+        cat <<EOF
+        { 
+          "name": "$(params.NAME)",
+          "tag_name": "$(params.TAG_NAME)",
+          "target_commitish": "$(params.BRANCH)",
+          "body": "$(params.DESCRIPTION)"
+        }
+        EOF
+        }
+        
+        # Creating asset json if file is to be uploaded with gitlab release
+        #
+        assetJson=$(cat <<EOF
+        ,"assets": {
+          "links": [
+            {
+              "name": "$(params.UPLOAD_ASSET_NAME)",
+              "url": "$(params.UPLOAD_ASSET_URL)"
+            }
+          ]
+        }
+        EOF
+        )
+        
+        # Checking whether asset is provided to upload with release or not.
+        #
+        if [ "$(params.UPLOAD_ASSET_NAME)" == "" ] || [ "$(params.UPLOAD_ASSET_URL)" == "" ]; then
+          assetJson=""
+        fi  
+
+        # Creating the api post data for the Gitlab
+        #
+        generate_gitlab_api_post_data()
+        {
+        cat <<EOF
+        {
+          "name": "$(params.NAME)",
+          "tag_name": "$(params.TAG_NAME)",
+          "description": "$(params.DESCRIPTION)",
+          "ref": "$(params.RELEASE_REF)"
+          $assetJson
+        }
+        EOF
+        }
+
+        echo "Creating release $(params.TAG_NAME)"
+
+        platform=$(params.PLATFORM)
+        # To ignore the case sensitivity of the input ",," is used.
+
+        # Check for the platform
+        if [ "${platform,,}" == "gitlab" ] ; then
+          
+          curl --header 'Content-Type: application/json' --header "PRIVATE-TOKEN:$TOKEN" \
+             --data "$(generate_gitlab_api_post_data)" \
+             --request POST https://gitlab.com/api/v4/projects/$(params.PROJECT_ID)/releases
+        fi
+
+        if [ "${platform,,}" == "github" ] ; then
+
+          GH_REPO="https://api.github.com/repos/$(params.OWNER)/$(params.REPO_NAME)"
+          GH_TAGS="$GH_REPO/releases/tags/$(params.TAG_NAME)"
+          AUTH="Authorization: token $TOKEN"
+
+          # Create a release url
+          #
+          RELEASE_URL="$GH_REPO/releases?access_token=$TOKEN"
+          #
+          # Create a release
+          #
+          curl --data "$(generate_github_api_post_data)" $RELEASE_URL
+
+          # Checking whether asset is not provided to upload with release or not.
+          #
+          if [ "$(params.UPLOAD_ASSET_NAME)" != "" ] ; then
+
+            echo "Uploading asset..."
+
+            # Read asset tags
+            #
+            response=$(curl -sH "$AUTH" $GH_TAGS)
+
+            # Get ID of the asset based on given filename
+            #
+            eval $(echo "$response" | grep -m 1 "id.:" | grep -w id | tr : = | tr -cd '[[:alnum:]]=')
+            [ "$id" ] || { echo "Error: Failed to get release id for tag: $(params.TAG_NAME)"; echo "$response\n" >&2; exit 1; }
+
+            filename=$(workspaces.upload.path)/$(params.UPLOAD_ASSET_NAME)
+
+            # Create upload assest URL
+            #
+            GH_ASSET="https://uploads.github.com/repos/$(params.OWNER)/$(params.REPO_NAME)/releases/$id/assets?name=$(basename $filename)"
+
+            # Upload the asset
+            #
+            curl --data-binary @"$filename" -H "$AUTH" -H "Content-Type: application/octet-stream" $GH_ASSET
+          fi
+        fi
+         
+      env:
+        - name: TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: $(params.git-token-secret)
+              key: $(params.git-token-secret-key)

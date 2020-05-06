@@ -1,0 +1,32 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: git-release-run
+spec:
+  taskRef:
+    name: git-release
+  serviceAccountName: secret-service-account
+  params:
+    - name: PLATFORM
+      value: Gitlab
+    - name: TAG_NAME
+      value: "v0.1.4"
+    - name: NAME
+      value: first release
+    - name: DESCRIPTION
+      value: This is first release
+    - name: PROJECT_ID
+      value: "18587362"
+    - name: RELEASE_REF
+      value: master
+    - name: UPLOAD_ASSET_NAME
+      value: sample.zip
+    - name: UPLOAD_ASSET_URL
+      value: https://google.com
+    - name: git-token-secret
+      value: git-secret
+    - name: git-token-secret-key
+      value: api-token
+  workspaces:
+    - name: upload
+      emptyDir: {}

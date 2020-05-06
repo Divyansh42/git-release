@@ -1,0 +1,33 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: git-release-run-
+spec:
+  taskRef:
+    name: git-release
+  serviceAccountName: secret-service-account
+  params:
+    - name: PLATFORM
+      value: Github
+    - name: TAG_NAME
+      value: "v1.0"
+    - name: NAME
+      value: First release
+    - name: DESCRIPTION
+      value: This is the first release
+    - name: REPO_NAME
+      value: test
+    - name: OWNER
+      value: divyansh42
+    - name: BRANCH
+      value: master
+    - name: UPLOAD_ASSET_NAME
+      value: run.yaml
+    - name: git-token-secret
+      value: git-secret
+    - name: git-token-secret-key
+      value: api-token
+  workspaces:
+    - name: upload
+      configmap:
+        name: upload-file
